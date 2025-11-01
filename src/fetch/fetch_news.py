@@ -22,7 +22,7 @@ NEWS_DATA_PATH = get_project_root() / "data" / "news_data.csv"
 NUM_NEWS_ITEMS = 10
 
 
-def fetch_news_google_rss(query="Adani Green Energy", num_items=10):
+def fetch_news_google_rss(query="Adani Green Energy", num_items=20):
     """
     Fetch news from Google News RSS feed.
     

@@ -2,7 +2,7 @@
 
 A comprehensive machine learning project for predicting Adani Green Energy (ADANIGREEN.NS) stock prices using LSTM and Temporal Fusion Transformer (TFT) models, enhanced with sentiment analysis and LLM-powered explanations.
 
-## 🎯 Project Overview
+##  Project Overview
 
 This project implements a full-stack ML pipeline for stock price prediction with:
 
@@ -16,7 +16,7 @@ This project implements a full-stack ML pipeline for stock price prediction with
 - **Streamlit Dashboard**: Interactive UI with charts, predictions, news, and AI explanations
 - **LLM Summaries**: flan-t5-small based explanations of predictions
 
-## 📁 Project Structure
+##  Project Structure
 
 ```
 AdaniGreenPredictor/
@@ -63,7 +63,7 @@ AdaniGreenPredictor/
 └── README.md                     # This file
 ```
 
-## 🚀 Setup Instructions
+##  Setup Instructions
 
 ### Prerequisites
 
@@ -189,7 +189,7 @@ Models will be saved to:
 
 After training, copy the `models/` directory back to Windows for inference.
 
-## 📊 Running the Dashboard
+##  Running the Dashboard
 
 ### On Windows (After Training)
 
@@ -217,7 +217,7 @@ After training, copy the `models/` directory back to Windows for inference.
    - Read AI-generated explanations
    - Refresh data on demand
 
-## 🔧 Configuration
+##  Configuration
 
 ### Environment Variables (Optional)
 
@@ -230,7 +230,7 @@ NEWSAPI_KEY=your_newsapi_key_here
 
 If not provided, the project will use Google News RSS feeds (free, no API key required).
 
-## 📝 Usage Examples
+##  Usage Examples
 
 ### Fetch Data Only
 
@@ -282,7 +282,7 @@ ensemble_result = ensemble_predict(weights={"LSTM": 0.5, "TFT": 0.5})
 print(f"Ensemble predicted price: ₹{ensemble_result['predicted_price']:.2f}")
 ```
 
-## 🐛 Troubleshooting
+##  Troubleshooting
 
 ### Issue: Models not found
 
@@ -304,7 +304,7 @@ print(torch.backends.mps.is_available())
 
 **Solution**: Ensure stable internet connection. The model will be downloaded automatically on first run (~440MB).
 
-## 📦 Dependencies
+##  Dependencies
 
 Key packages:
 - `torch` >= 2.0.0 - PyTorch
@@ -317,11 +317,11 @@ Key packages:
 
 See `requirements.txt` for complete list.
 
-## 📄 License
+##  License
 
 This project is for educational purposes. Stock predictions are for demonstration only and should not be used for actual trading decisions.
 
-## 🤝 Contributing
+##  Contributing
 
 This is a project implementation. Feel free to extend and improve:
 
@@ -331,11 +331,10 @@ This is a project implementation. Feel free to extend and improve:
 - Add more data sources
 - Enhance dashboard features
 
-## 📧 Contact
+##  Contact
 
 For questions or issues, please check the code documentation or create an issue in the repository.
 
 ---
 
-**Built with ❤️ using PyTorch Lightning, pytorch-forecasting, and Streamlit**
 

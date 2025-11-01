@@ -26,7 +26,7 @@ def fetch_stock_data(period="5y"):
     Fetch historical stock data from yfinance.
     
     Args:
-        period (str): Period to fetch. Options: '1y', '2y', '5y', 'max', etc.
+        period (str): Period to fetch. Options: '5y', 'max', etc.
     
     Returns:
         pd.DataFrame: DataFrame with OHLCV data
