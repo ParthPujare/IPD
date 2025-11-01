@@ -1,0 +1,2 @@
+"""AdaniGreenPredictor package."""
+
