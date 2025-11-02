@@ -3,6 +3,7 @@ LSTM training script using PyTorch Lightning.
 Trains a regression model to predict next-day closing price.
 """
 
+from sklearn.preprocessing import MinMaxScaler
 import argparse
 import pandas as pd
 import numpy as np
@@ -14,6 +15,7 @@ from sklearn.model_selection import train_test_split
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import EarlyStopping, ModelCheckpoint
 from pathlib import Path
+import torch.optim as optim
 import sys
 import pickle
 
@@ -24,7 +26,7 @@ sys.path.insert(0, str(project_root))
 from src.utils.helpers import get_project_root, ensure_dir, get_accelerator
 
 
-FEATURES_DATA_PATH = get_project_root() / "data" / "features.csv"
+FEATURES_DATA_PATH = get_project_root() / "data" / "features_enhanced.csv"
 CHECKPOINT_DIR = get_project_root() / "models" / "checkpoints"
 SAVED_MODELS_DIR = get_project_root() / "models" / "saved_models"
 SCALER_PATH = get_project_root() / "models" / "saved_models" / "lstm_scaler.pkl"
@@ -50,193 +52,173 @@ class StockDataset(Dataset):
 
 
 class LSTMModel(pl.LightningModule):
-    """LSTM model for stock price prediction."""
-    
+    """Bidirectional LSTM with LayerNorm and OneCycleLR for stock prediction."""
+
     def __init__(self, input_size, hidden_size=128, num_layers=2, dropout=0.2, lr=0.001):
-        """
-        Args:
-            input_size (int): Number of input features
-            hidden_size (int): LSTM hidden dimension
-            num_layers (int): Number of LSTM layers
-            dropout (float): Dropout rate
-            lr (float): Learning rate
-        """
         super().__init__()
         self.save_hyperparameters()
-        
+
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.lr = lr
+
+        # --- Bidirectional LSTM ---
         self.lstm = nn.LSTM(
             input_size=input_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
             dropout=dropout if num_layers > 1 else 0,
-            batch_first=True
+            batch_first=True,
+            bidirectional=True
         )
-        
+
+        # --- Layer Normalization ---
+        self.layer_norm = nn.LayerNorm(hidden_size * 2)
+
+        # --- Fully Connected Layers ---
         self.fc = nn.Sequential(
-            nn.Linear(hidden_size, 64),
+            nn.Linear(hidden_size * 2, 128),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(64, 32),
+            nn.Linear(128, 64),
             nn.ReLU(),
             nn.Dropout(dropout),
-            nn.Linear(32, 1)
+            nn.Linear(64, 1)
         )
-        
-        self.lr = lr
+
         self.criterion = nn.MSELoss()
-    
+
     def forward(self, x):
-        """
-        Forward pass.
-        
-        Args:
-            x (torch.Tensor): Input tensor (batch, seq_len, features)
-        
-        Returns:
-            torch.Tensor: Predicted values (batch, 1)
-        """
+        """Forward pass."""
         lstm_out, _ = self.lstm(x)
-        # Take the last output
-        last_output = lstm_out[:, -1, :]
-        output = self.fc(last_output)
+        last_output = lstm_out[:, -1, :]  # (batch, hidden*2)
+        norm_out = self.layer_norm(last_output)
+        output = self.fc(norm_out)
         return output
-    
+
     def training_step(self, batch, batch_idx):
         x, y = batch
         y_hat = self(x)
         loss = self.criterion(y_hat.squeeze(), y)
         self.log("train_loss", loss, on_step=True, on_epoch=True, prog_bar=True)
         return loss
-    
+
     def validation_step(self, batch, batch_idx):
         x, y = batch
         y_hat = self(x)
         loss = self.criterion(y_hat.squeeze(), y)
-        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("val_loss", loss, on_epoch=True, prog_bar=True)
         return loss
-    
+
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode="min", factor=0.5, patience=5
+
+        # --- OneCycleLR scheduler ---
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=self.lr,
+            total_steps=self.trainer.estimated_stepping_batches,
+            anneal_strategy="cos",
+            pct_start=0.3,
         )
+
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "monitor": "val_loss"
+                "interval": "step",   # update every batch
+                "frequency": 1
             }
         }
 
 
+
+from sklearn.preprocessing import MinMaxScaler
+
 def prepare_data(seq_len=30, test_size=0.2, debug=False):
     """
-    Prepare data for LSTM training.
-    
-    Args:
-        seq_len (int): Sequence length for LSTM
-        test_size (float): Test split ratio
-        debug (bool): If True, use smaller dataset for debugging
-    
+    Prepare data for LSTM training with both feature and target scaling.
+
     Returns:
-        tuple: (X_train, X_val, y_train, y_val, scaler, feature_cols)
+        tuple: (X_train, X_val, y_train, y_val, feature_scaler, target_scaler, feature_cols)
     """
-    # Load features
-    df = pd.read_csv(FEATURES_DATA_PATH)
-    df = df.sort_values("date").reset_index(drop=True)
-    
-    # Filter to numeric columns only (exclude date, ticker, sentiment_label_mode)
+    df = pd.read_csv(FEATURES_DATA_PATH).sort_values("date").reset_index(drop=True)
+
     exclude_cols = ["date", "ticker", "sentiment_label_mode"]
-    feature_cols = [col for col in df.columns if col not in exclude_cols and col != "Close"]
-    
-    # Use Close price as target
-    target_col = "Close"
-    
-    # Select features
+    feature_cols = [c for c in df.columns if c not in exclude_cols and c != "Close"]
+
     X = df[feature_cols].values
-    y = df[target_col].values
-    
+    y = df["Close"].values.reshape(-1, 1)
+
     if debug:
-        # Use only last 500 rows for debugging
         X = X[-500:]
         y = y[-500:]
-    
-    # Create sequences
-    sequences = []
-    targets = []
-    
-    for i in range(seq_len, len(X)):
-        sequences.append(X[i - seq_len:i])
-        targets.append(y[i])
-    
+
+    # === Initialize scalers ===
+    feature_scaler = MinMaxScaler(feature_range=(0, 1))
+    target_scaler = MinMaxScaler(feature_range=(0, 1))
+
+    # Fit & transform both
+    X_scaled = feature_scaler.fit_transform(X)
+    y_scaled = target_scaler.fit_transform(y)
+
+    # === Create sequences ===
+    sequences, targets = [], []
+    for i in range(seq_len, len(X_scaled)):
+        sequences.append(X_scaled[i - seq_len:i])
+        targets.append(y_scaled[i])
+
     sequences = np.array(sequences)
-    targets = np.array(targets)
-    
-    # Split train/val
+    targets = np.array(targets).squeeze()
+
+    # === Train/val split ===
     split_idx = int(len(sequences) * (1 - test_size))
-    X_train = sequences[:split_idx]
-    y_train = targets[:split_idx]
-    X_val = sequences[split_idx:]
-    y_val = targets[split_idx:]
-    
-    # Scale features
-    scaler = StandardScaler()
-    # Reshape for scaling
-    X_train_reshaped = X_train.reshape(-1, X_train.shape[-1])
-    X_train_scaled = scaler.fit_transform(X_train_reshaped)
-    X_train_scaled = X_train_scaled.reshape(X_train.shape)
-    
-    X_val_reshaped = X_val.reshape(-1, X_val.shape[-1])
-    X_val_scaled = scaler.transform(X_val_reshaped)
-    X_val_scaled = X_val_scaled.reshape(X_val.shape)
-    
-    # Save scaler
+    X_train, X_val = sequences[:split_idx], sequences[split_idx:]
+    y_train, y_val = targets[:split_idx], targets[split_idx:]
+
+    # === Save both scalers ===
     ensure_dir(SCALER_PATH.parent)
-    with open(SCALER_PATH, "wb") as f:
-        pickle.dump(scaler, f)
-    
+    feature_scaler_path = SCALER_PATH.parent / "lstm_feature_scaler.pkl"
+    target_scaler_path = SCALER_PATH.parent / "lstm_target_scaler.pkl"
+
+    with open(feature_scaler_path, "wb") as f:
+        pickle.dump(feature_scaler, f)
+    with open(target_scaler_path, "wb") as f:
+        pickle.dump(target_scaler, f)
+
+    print(" Features and targets scaled using MinMaxScaler (0–1 range).")
     print(f"Data prepared: Train={len(X_train)}, Val={len(X_val)}, Features={len(feature_cols)}")
-    
-    return X_train_scaled, X_val_scaled, y_train, y_val, scaler, feature_cols
+
+    return X_train, X_val, y_train, y_val, feature_scaler, target_scaler, feature_cols
+
 
 
 def train_lstm(
     seq_len=30,
-    hidden_size=128,
-    num_layers=2,
-    dropout=0.2,
+    hidden_size=256,      # Increased model capacity for 60+ features
+    num_layers=3,         # Deeper LSTM stack for richer temporal patterns
+    dropout=0.3,          # More regularization to reduce overfitting
     batch_size=32,
-    epochs=50,
-    lr=0.001,
+    epochs=80,            # Longer training to ensure convergence
+    lr=0.0005,            # Smaller learning rate for stable updates
     debug=False
 ):
     """
-    Train LSTM model.
-    
-    Args:
-        seq_len (int): Sequence length
-        hidden_size (int): LSTM hidden size
-        num_layers (int): Number of LSTM layers
-        dropout (float): Dropout rate
-        batch_size (int): Batch size
-        epochs (int): Number of epochs
-        lr (float): Learning rate
-        debug (bool): Debug mode (smaller dataset)
+    Train LSTM model with improved configuration and save all metadata.
     """
-    # Prepare data
-    X_train, X_val, y_train, y_val, scaler, feature_cols = prepare_data(
+
+    print("📊 Preparing data...")
+    X_train, X_val, y_train, y_val, feature_scaler, target_scaler, feature_cols = prepare_data(
         seq_len=seq_len, debug=debug
     )
-    
-    # Create datasets
+
     train_dataset = StockDataset(X_train, y_train)
     val_dataset = StockDataset(X_val, y_val)
-    
-    # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)
-    
-    # Create model
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+
+    print(f"🧠 Building model: input={len(feature_cols)}, hidden={hidden_size}, layers={num_layers}")
     model = LSTMModel(
         input_size=len(feature_cols),
         hidden_size=hidden_size,
@@ -244,29 +226,26 @@ def train_lstm(
         dropout=dropout,
         lr=lr
     )
-    
-    # Callbacks
+
     checkpoint_callback = ModelCheckpoint(
         dirpath=CHECKPOINT_DIR,
-        filename="lstm-{epoch:02d}-{val_loss:.4f}",
+        filename=f"lstm-h{hidden_size}-l{num_layers}-{{epoch:02d}}-{{val_loss:.4f}}",
         monitor="val_loss",
         mode="min",
         save_top_k=1,
         save_last=True
     )
-    
+
     early_stopping = EarlyStopping(
         monitor="val_loss",
         patience=10,
         mode="min",
         verbose=True
     )
-    
-    # Get accelerator
+
     accelerator = get_accelerator()
-    print(f"Training on accelerator: {accelerator}")
-    
-    # Trainer
+    print(f"🚀 Training on accelerator: {accelerator}")
+
     trainer = pl.Trainer(
         accelerator=accelerator,
         max_epochs=epochs,
@@ -274,26 +253,32 @@ def train_lstm(
         enable_progress_bar=True,
         log_every_n_steps=10
     )
-    
-    # Train
+
     trainer.fit(model, train_loader, val_loader)
-    
-    # Load best model
+
     best_model_path = checkpoint_callback.best_model_path
-    print(f"Best model saved at: {best_model_path}")
-    
-    # Save final model for inference
+    print(f" Best model saved at: {best_model_path}")
+
     ensure_dir(SAVED_MODELS_DIR)
     final_model_path = SAVED_MODELS_DIR / "lstm.pt"
     best_model = LSTMModel.load_from_checkpoint(best_model_path)
     torch.save(best_model.state_dict(), final_model_path)
-    print(f"Final model saved to {final_model_path}")
-    
-    # Save feature columns for inference
+    print(f" Final model saved to {final_model_path}")
+
+    # === Save scalers & feature metadata for inference ===
+    with open(SAVED_MODELS_DIR / "lstm_feature_scaler.pkl", "wb") as f:
+        pickle.dump(feature_scaler, f)
+    with open(SAVED_MODELS_DIR / "lstm_target_scaler.pkl", "wb") as f:
+        pickle.dump(target_scaler, f)
     with open(SAVED_MODELS_DIR / "lstm_features.pkl", "wb") as f:
         pickle.dump(feature_cols, f)
-    
+
+    print(" Saved feature & target scalers and metadata.")
+    print(" Training complete.")
+
     return best_model_path
+
+
 
 
 if __name__ == "__main__":
