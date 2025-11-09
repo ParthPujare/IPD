@@ -9,6 +9,7 @@ import numpy as np
 import torch
 import pickle
 import pytorch_lightning as pl
+from src.preprocess.shared_preprocessor import prepare_shared_data
 from pytorch_forecasting import TimeSeriesDataSet, TemporalFusionTransformer
 from pytorch_forecasting.data import GroupNormalizer
 from pytorch_forecasting.metrics import MAE
@@ -43,78 +44,133 @@ tb_logger = TensorBoardLogger("lightning_logs", name="tft_runs")
 
 
 # === Consistent preprocessing with LSTM ===
+# def prepare_tft_data(seq_len=30, test_size=0.2, debug=False, min_val_samples=120):
+#     """
+#     Prepare data for Temporal Fusion Transformer:
+#     - Prefer precomputed features (Close_sma_5, Close_std_5) if present,
+#       otherwise compute rolling mean/std and create canonical column names
+#       Close_rolling_mean_5 and Close_rolling_std_5 so training and inference
+#       use identical feature names.
+#     - Maintain at least 'min_val_samples' validation samples
+#     - Keep seq_len overlap before validation split for encoder context
+#     """
+#     df = pd.read_csv(FEATURES_DATA_PATH).sort_values("date").reset_index(drop=True)
+#     df["date"] = pd.to_datetime(df["date"])
+#     df["time_idx"] = (df["date"] - df["date"].min()).dt.days
+#     df["group_id"] = df.get("ticker", "ADANIGREEN.NS").fillna("ADANIGREEN.NS")
+
+#     if debug:
+#         df = df.tail(500).reset_index(drop=True)
+
+#     target_col = "Close"
+#     exclude_cols = ["date", "ticker", "sentiment_label_mode", "time_idx", "group_id", target_col]
+
+#     # --- Ensure canonical engineered features exist (prefer CSV precomputed ones) ---
+#     # Rolling mean 5
+#     if "Close_rolling_mean_5" not in df.columns:
+#         if "Close_sma_5" in df.columns:
+#             df["Close_rolling_mean_5"] = df["Close_sma_5"]
+#         else:
+#             df["Close_rolling_mean_5"] = df["Close"].rolling(window=5, min_periods=1).mean()
+
+#     # Rolling std 5
+#     if "Close_rolling_std_5" not in df.columns:
+#         if "Close_std_5" in df.columns:
+#             df["Close_rolling_std_5"] = df["Close_std_5"]
+#         else:
+#             df["Close_rolling_std_5"] = df["Close"].rolling(window=5, min_periods=1).std().fillna(0.0)
+
+#     # diff and pct change (canonical names)
+#     if "Close_diff" not in df.columns:
+#         df["Close_diff"] = df["Close"].diff().fillna(0)
+#     if "Close_pct_change" not in df.columns:
+#         df["Close_pct_change"] = df["Close"].pct_change().fillna(0)
+
+#     # === Define features ===
+#     # Exclude explicit excluded columns and the target
+#     feature_cols = [col for col in df.columns if col not in exclude_cols]
+
+#     # Remove duplicates preserving order (guard against duplicated column names in CSV)
+#     feature_cols = list(dict.fromkeys(feature_cols))
+
+#     if not feature_cols:
+#         raise ValueError("No feature columns found after excluding non-features.")
+
+#     # === Scale features only ===
+#     feature_scaler = MinMaxScaler(feature_range=(0, 1))
+#     df[feature_cols] = feature_scaler.fit_transform(df[feature_cols].astype(float))
+
+#     # Save feature scaler
+#     with open(SAVED_MODELS_DIR / "tft_feature_scaler.pkl", "wb") as f:
+#         pickle.dump(feature_scaler, f)
+
+#     # === Train/Val Split ===
+#     total = len(df)
+#     split_idx = int(total * (1 - test_size))
+#     val_size = total - split_idx
+#     if val_size < min_val_samples:
+#         print(f" Validation size too small ({val_size}), adjusting split to guarantee {min_val_samples} validation samples.")
+#         split_idx = max(0, total - min_val_samples)
+
+#     train_df = df.iloc[:split_idx].copy().reset_index(drop=True)
+#     val_df = df.iloc[max(0, split_idx - seq_len):].copy().reset_index(drop=True)
+
+#     # === TimeSeriesDataSet ===
+#     training = TimeSeriesDataSet(
+#         train_df,
+#         time_idx="time_idx",
+#         target=target_col,
+#         group_ids=["group_id"],
+#         min_encoder_length=seq_len,
+#         max_encoder_length=seq_len,
+#         min_prediction_length=1,
+#         max_prediction_length=1,
+#         static_categoricals=[],
+#         time_varying_known_reals=[],
+#         time_varying_unknown_reals=feature_cols,
+#         target_normalizer=GroupNormalizer(groups=["group_id"], transformation="softplus"),
+#         add_relative_time_idx=True,
+#         add_target_scales=True,
+#         add_encoder_length=True,
+#         allow_missing_timesteps=True,
+#     )
+
+#     validation = TimeSeriesDataSet.from_dataset(training, val_df, predict=False, stop_randomization=True)
+
+#     train_dataloader = training.to_dataloader(train=True, batch_size=64, num_workers=0)
+#     val_dataloader = validation.to_dataloader(train=False, batch_size=64, num_workers=0)
+
+#     print(f" TFT Data prepared: Train={len(training)}, Val={len(validation)}, Features={len(feature_cols)}")
+#     return training, validation, train_dataloader, val_dataloader, feature_cols
+
+
 def prepare_tft_data(seq_len=30, test_size=0.2, debug=False, min_val_samples=120):
     """
-    Prepare data for Temporal Fusion Transformer:
-    - Prefer precomputed features (Close_sma_5, Close_std_5) if present,
-      otherwise compute rolling mean/std and create canonical column names
-      Close_rolling_mean_5 and Close_rolling_std_5 so training and inference
-      use identical feature names.
-    - Maintain at least 'min_val_samples' validation samples
-    - Keep seq_len overlap before validation split for encoder context
+    Prepare data for Temporal Fusion Transformer using the same scaled data
+    and features as LSTM (via prepare_shared_data).
+    Ensures both models are trained on identical inputs.
     """
-    df = pd.read_csv(FEATURES_DATA_PATH).sort_values("date").reset_index(drop=True)
+    # === Get pre-scaled, unified dataset ===
+    df, feature_cols = prepare_shared_data(seq_len=seq_len)
     df["date"] = pd.to_datetime(df["date"])
     df["time_idx"] = (df["date"] - df["date"].min()).dt.days
     df["group_id"] = df.get("ticker", "ADANIGREEN.NS").fillna("ADANIGREEN.NS")
 
-    if debug:
-        df = df.tail(500).reset_index(drop=True)
-
-    target_col = "Close"
+    target_col = "Close_scaled"  #  Already scaled in shared preprocessor
     exclude_cols = ["date", "ticker", "sentiment_label_mode", "time_idx", "group_id", target_col]
 
-    # --- Ensure canonical engineered features exist (prefer CSV precomputed ones) ---
-    # Rolling mean 5
-    if "Close_rolling_mean_5" not in df.columns:
-        if "Close_sma_5" in df.columns:
-            df["Close_rolling_mean_5"] = df["Close_sma_5"]
-        else:
-            df["Close_rolling_mean_5"] = df["Close"].rolling(window=5, min_periods=1).mean()
-
-    # Rolling std 5
-    if "Close_rolling_std_5" not in df.columns:
-        if "Close_std_5" in df.columns:
-            df["Close_rolling_std_5"] = df["Close_std_5"]
-        else:
-            df["Close_rolling_std_5"] = df["Close"].rolling(window=5, min_periods=1).std().fillna(0.0)
-
-    # diff and pct change (canonical names)
-    if "Close_diff" not in df.columns:
-        df["Close_diff"] = df["Close"].diff().fillna(0)
-    if "Close_pct_change" not in df.columns:
-        df["Close_pct_change"] = df["Close"].pct_change().fillna(0)
-
-    # === Define features ===
-    # Exclude explicit excluded columns and the target
-    feature_cols = [col for col in df.columns if col not in exclude_cols]
-
-    # Remove duplicates preserving order (guard against duplicated column names in CSV)
-    feature_cols = list(dict.fromkeys(feature_cols))
-
-    if not feature_cols:
-        raise ValueError("No feature columns found after excluding non-features.")
-
-    # === Scale features only ===
-    feature_scaler = MinMaxScaler(feature_range=(0, 1))
-    df[feature_cols] = feature_scaler.fit_transform(df[feature_cols].astype(float))
-
-    # Save feature scaler
-    with open(SAVED_MODELS_DIR / "tft_feature_scaler.pkl", "wb") as f:
-        pickle.dump(feature_scaler, f)
-
-    # === Train/Val Split ===
+    # === Train/Validation Split ===
     total = len(df)
     split_idx = int(total * (1 - test_size))
     val_size = total - split_idx
     if val_size < min_val_samples:
-        print(f"⚠️ Validation size too small ({val_size}), adjusting split to guarantee {min_val_samples} validation samples.")
+        print(f" Validation size too small ({val_size}), adjusting to {min_val_samples}.")
         split_idx = max(0, total - min_val_samples)
 
     train_df = df.iloc[:split_idx].copy().reset_index(drop=True)
     val_df = df.iloc[max(0, split_idx - seq_len):].copy().reset_index(drop=True)
 
-    # === TimeSeriesDataSet ===
+    # === Build TFT Datasets ===
     training = TimeSeriesDataSet(
         train_df,
         time_idx="time_idx",
@@ -127,9 +183,9 @@ def prepare_tft_data(seq_len=30, test_size=0.2, debug=False, min_val_samples=120
         static_categoricals=[],
         time_varying_known_reals=[],
         time_varying_unknown_reals=feature_cols,
-        target_normalizer=GroupNormalizer(groups=["group_id"], transformation="softplus"),
+        target_normalizer=None,  # Already scaled!
         add_relative_time_idx=True,
-        add_target_scales=True,
+        add_target_scales=False,  # Disabled since we scaled manually
         add_encoder_length=True,
         allow_missing_timesteps=True,
     )
@@ -139,7 +195,7 @@ def prepare_tft_data(seq_len=30, test_size=0.2, debug=False, min_val_samples=120
     train_dataloader = training.to_dataloader(train=True, batch_size=64, num_workers=0)
     val_dataloader = validation.to_dataloader(train=False, batch_size=64, num_workers=0)
 
-    print(f" TFT Data prepared: Train={len(training)}, Val={len(validation)}, Features={len(feature_cols)}")
+    print(f"TFT Data prepared (shared): Train={len(training)}, Val={len(validation)}, Features={len(feature_cols)}")
     return training, validation, train_dataloader, val_dataloader, feature_cols
 
 
@@ -226,10 +282,10 @@ class TFTLightningWrapper(pl.LightningModule):
 
 # === Train Function ===
 def train_tft(
-    seq_len=60,                      # 🔁 longer lookback for better trend capture
-    hidden_size=96,                  # 💪 larger hidden layer
-    attention_head_size=4,           # 🧠 more attention heads
-    dropout=0.2,                     # ⚖️ mild regularization
+    seq_len=60,                      # longer lookback for better trend capture
+    hidden_size=96,                  #  larger hidden layer
+    attention_head_size=4,           #  more attention heads
+    dropout=0.2,                     #  mild regularization
     batch_size=64,
     epochs=50,
     lr=0.001,
@@ -284,7 +340,7 @@ def train_tft(
     # === Trainer (CPU-only) ===
     trainer = pl.Trainer(
         logger=tb_logger,
-        accelerator="cpu",      # ✅ ensures MPS/GPU won't be used
+        accelerator="cpu",      #  ensures MPS/GPU won't be used
         devices=1,
         max_epochs=epochs,
         callbacks=[checkpoint_callback, early_stopping],
@@ -336,6 +392,6 @@ if __name__ == "__main__":
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
 
-    print(" 🚀 Starting TFT training...")
+    print("  Starting TFT training...")
     train_tft(**vars(args))
-    print(" ✅ Training complete!")
+    print("  Training complete!")
