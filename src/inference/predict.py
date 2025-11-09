@@ -369,7 +369,7 @@ def predict_next_day_tft():
 
         model, training_dataset = load_tft_model()
 
-        # load shared scalers & feature list
+        # Load shared scalers & feature list
         with open(SAVED_MODELS_DIR / "shared_feature_scaler.pkl", "rb") as f:
             feature_scaler = pickle.load(f)
         with open(SAVED_MODELS_DIR / "shared_target_scaler.pkl", "rb") as f:
@@ -377,24 +377,21 @@ def predict_next_day_tft():
         with open(SAVED_MODELS_DIR / "shared_features.pkl", "rb") as f:
             feature_cols = pickle.load(f)
 
-        # read the authoritative stock data for last_price
+        # --- Load authoritative stock data for last_price ---
         stock_path = get_project_root() / "data" / "stock_data.csv"
         if stock_path.exists():
             stock_df = pd.read_csv(stock_path)
-            # ensure date and sorting
             if "date" in stock_df.columns:
                 stock_df["date"] = pd.to_datetime(stock_df["date"])
                 stock_df = stock_df.sort_values("date").reset_index(drop=True)
-            # try common close names
             if "Close" not in stock_df.columns and "close" in stock_df.columns:
                 stock_df["Close"] = stock_df["close"]
             last_price = float(pd.to_numeric(stock_df["Close"].iloc[-1], errors="coerce"))
         else:
-            last_price = None  # fallback if no stock file present
+            last_price = None
 
-        # load features dataset (for model inputs)
-        df = safe_read_features()  # use the helper that parses dates and ensures column strings
-        # ensure date col, time_idx, group_id exist for TFT dataset
+        # --- Load features dataset (for model inputs) ---
+        df = safe_read_features()
         if "date" not in df.columns:
             raise KeyError("'date' column missing from features file.")
         df["date"] = pd.to_datetime(df["date"])
@@ -402,7 +399,7 @@ def predict_next_day_tft():
         df["time_idx"] = (df["date"] - df["date"].min()).dt.days
         df["group_id"] = df.get("ticker", "ADANIGREEN.NS").fillna("ADANIGREEN.NS")
 
-        # ensure canonical derived features exist
+        # --- Derived features reconstruction ---
         close_col = _col_exists_anycase(df, "Close")
         if close_col is None:
             raise KeyError("'Close' column missing — cannot recreate derived features.")
@@ -411,52 +408,58 @@ def predict_next_day_tft():
         df["Close_rolling_mean_5"] = df[close_col].rolling(5, min_periods=1).mean()
         df["Close_rolling_std_5"] = df[close_col].rolling(5, min_periods=1).std().fillna(0)
 
-        # align features (case-insensitive + aliasing)
+        # --- Align features with training ---
         df_aligned, created, missing = align_features_with_df(df, feature_cols)
         if missing:
             raise ValueError(f"Missing required features: {missing}")
 
-        # ensure numeric and scale
+        # --- Ensure numeric and scale ---
         for c in feature_cols:
             df_aligned[c] = pd.to_numeric(df_aligned[c], errors="coerce").fillna(0.0)
 
-        # attempt to scale using shared scaler (if appropriate)
         try:
             X_scaled = feature_scaler.transform(df_aligned[feature_cols].values)
-            # replace in df_aligned (TimeSeriesDataSet expects columns to be present)
             df_aligned[feature_cols] = X_scaled
         except Exception:
-            # if transform fails, assume features already scaled in CSV (rare)
-            pass
+            pass  # if transform fails, assume already scaled
 
-        # add scaled target for dataset (if required)
+        # --- Add scaled target for dataset ---
         try:
-            df_aligned["Close_scaled"] = target_scaler.transform(df_aligned[close_col].values.reshape(-1, 1))
+            df_aligned["Close_scaled"] = target_scaler.transform(
+                df_aligned[close_col].values.reshape(-1, 1)
+            )
         except Exception:
-            # ignore if not necessary
             pass
 
-        # build prediction dataset and dataloader
+        # ✅ NEW FIX: Handle any NA/inf before passing to TFT
+        df_aligned.replace([np.inf, -np.inf], np.nan, inplace=True)
+        num_missing = df_aligned.isna().sum().sum()
+        if num_missing > 0:
+            print(f"⚠️  Detected {num_missing} missing/infinite values — filling before TFT prediction.")
+            df_aligned = df_aligned.fillna(method="bfill").fillna(method="ffill").fillna(0)
+
+        # --- Build TFT prediction dataset ---
         prediction_dataset = TimeSeriesDataSet.from_dataset(
             training_dataset, df_aligned, predict=True, stop_randomization=True
         )
-        prediction_dataloader = prediction_dataset.to_dataloader(train=False, batch_size=1, num_workers=0)
+        prediction_dataloader = prediction_dataset.to_dataloader(
+            train=False, batch_size=1, num_workers=0
+        )
 
-        # model inference
+        # --- Model inference ---
         model.eval()
         with torch.no_grad():
             preds = model.predict(prediction_dataloader, return_y=False)
-        # normalize preds to numpy
+
         if isinstance(preds, torch.Tensor):
             preds_np = preds.detach().cpu().numpy().reshape(-1, 1)
         else:
             preds_np = np.array(preds).reshape(-1, 1)
 
         predicted_scaled = preds_np[-1].reshape(1, -1)
-        # inverse transform predicted price into original scale using shared target scaler
         predicted_price = float(target_scaler.inverse_transform(predicted_scaled)[0][0])
 
-        # if we couldn't find a stock_data last_price earlier, read it from features as fallback
+        # --- Last price fallback ---
         if last_price is None:
             last_price = float(pd.to_numeric(df_aligned[close_col].iloc[-1], errors="coerce"))
 
@@ -481,6 +484,7 @@ def predict_next_day_tft():
         import traceback
         traceback.print_exc()
         raise
+
 
 
 
