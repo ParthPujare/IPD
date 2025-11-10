@@ -1,0 +1,12 @@
+{
+  "total_eval_seconds": 1.8426344170002267,
+  "lstm_inference_seconds": 0.1076222499832511,
+  "tft_inference_seconds": null,
+  "dataset_rows": 1451,
+  "feature_count": 60,
+  "seq_len": 30,
+  "date_range": [
+    "2020-01-01",
+    "2025-11-07"
+  ]
+}
