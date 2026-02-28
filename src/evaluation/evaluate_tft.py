@@ -17,8 +17,8 @@ from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet
 ROOT = Path(__file__).parent.parent.parent
 DATA_PATH = ROOT / "data" / "features_enhanced.csv"
 MODEL_PATH = ROOT / "models" / "saved_models" / "tft.pth"
-FEATURE_SCALER_PATH = ROOT / "models" / "saved_models" / "tft_feature_scaler.pkl"
-TARGET_SCALER_PATH = ROOT / "models" / "saved_models" / "tft_target_scaler.pkl"
+FEATURE_SCALER_PATH = ROOT / "models" / "saved_models" / "shared_feature_scaler.pkl"
+TARGET_SCALER_PATH = ROOT / "models" / "saved_models" / "shared_target_scaler.pkl"
 DATASET_PATH = ROOT / "models" / "saved_models" / "tft_training_dataset.pkl"
 
 # ---- helpers ----
@@ -160,16 +160,13 @@ print("   Unexpected keys:", len(unexpected))
 tft = tft.to("cpu")
 tft.eval()
 
-df = pd.read_csv(DATA_PATH).sort_values("date").reset_index(drop=True)
+from src.preprocess.shared_preprocessor import prepare_shared_data
+df, _ = prepare_shared_data()
+if 'date' in df.columns:
+    df = df.sort_values("date").reset_index(drop=True)
 df["date"] = pd.to_datetime(df["date"])
 df["time_idx"] = (df["date"] - df["date"].min()).dt.days
 df["group_id"] = df.get("ticker", "ADANIGREEN.NS").fillna("ADANIGREEN.NS")
-
-# === Recreate engineered features (must match training) ===
-df["Close_diff"] = df["Close"].diff().fillna(0)
-df["Close_pct_change"] = df["Close"].pct_change().fillna(0)
-df["Close_rolling_mean_5"] = df["Close"].rolling(window=5).mean().fillna(method="bfill")
-df["Close_rolling_std_5"] = df["Close"].rolling(window=5).std().fillna(method="bfill")
 
 # Apply same feature scaling as training
 with open(FEATURE_SCALER_PATH, "rb") as f:
@@ -184,7 +181,7 @@ if missing_features:
     print(f"⚠️ Skipping {len(missing_features)} TFT internal/missing features: {missing_features}")
 
 # Apply scaling only to valid features
-df[valid_features] = feature_scaler.transform(df[valid_features].astype(float))
+# df[valid_features] = feature_scaler.transform(df[valid_features].astype(float))  # Skipped: already scaled by prepare_shared_data
 
 
 
@@ -272,11 +269,13 @@ min_len = min(len(pred_arr), len(y_arr))
 pred_arr = pred_arr[:min_len]
 y_arr = y_arr[:min_len]
 
-# --- Do NOT inverse-transform: TFT internally normalizes target using GroupNormalizer ---
-print("Skipping external inverse transform — TFT outputs are already in original target scale.")
-preds_inv = pred_arr.reshape(-1)
-y_true_inv = y_arr.reshape(-1)
+# --- Inverse-transform: TFT model outputs scaled predictions ---
+print("Inverse transforming predictions to original target scale.")
+preds_scaled = pred_arr.reshape(-1, 1)
+y_true_scaled = y_arr.reshape(-1, 1)
 
+preds_inv = target_scaler.inverse_transform(preds_scaled).reshape(-1)
+y_true_inv = target_scaler.inverse_transform(y_true_scaled).reshape(-1)
 
 print("\n--- Debug: Range Check ---")
 print(f"Actual (y_true_inv): min={y_true_inv.min():.2f}, max={y_true_inv.max():.2f}")
@@ -332,17 +331,22 @@ with open(out_dir / "tft_metrics.json", "w") as f:
 plt.figure(figsize=(12, 5))
 plt.plot(y_true_inv, label="Actual", linewidth=2)
 plt.plot(preds_inv, label="Predicted", linewidth=2)
-plt.title("TFT Predicted vs Actual Closing Prices")
+plt.title("Newly Trained TFT Model - Predicted vs Actual Closing Prices")
 plt.legend()
 plt.tight_layout()
-plt.show()
-
+plt.savefig(out_dir / "newly_trained_tft_actual_vs_pred.png")
+plt.savefig(ROOT / "plots" / "newly_trained_tft_actual_vs_pred.png")
+print(f"Saved plot to plots/newly_trained_tft_actual_vs_pred.png")
+plt.close()
 
 # --- Diagnostic: residual plot ---
 plt.figure(figsize=(10, 4))
 plt.plot(y_true_inv - preds_inv, label="Residual (Actual - Predicted)", color="orange")
-plt.title("Residual Plot (Trend Check)")
+plt.title("Newly Trained TFT Model - Residual Plot")
 plt.axhline(0, color="black", linestyle="--")
 plt.legend()
 plt.tight_layout()
-plt.show()
+plt.savefig(out_dir / "newly_trained_tft_residuals.png")
+plt.savefig(ROOT / "plots" / "newly_trained_tft_residuals.png")
+print(f"Saved plot to plots/newly_trained_tft_residuals.png")
+plt.close()

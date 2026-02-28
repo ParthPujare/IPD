@@ -59,19 +59,15 @@ def load_latest_checkpoint():
     return str(latest)
 
 
-def build_sequences(df, feature_cols, feature_scaler, target_scaler, seq_len=SEQ_LEN):
-    """Rebuild sequences with proper scaling for both features and target."""
+def build_sequences(df, feature_cols, seq_len=SEQ_LEN):
+    """Rebuild sequences from pre-scaled DataFrame features/target."""
     X = df[feature_cols].values
-    y = df["Close"].values.reshape(-1, 1)
-
-    # Scale features and target exactly as done in training
-    X_scaled = feature_scaler.transform(X)
-    y_scaled = target_scaler.transform(y)
+    y = df["Close_scaled"].values.reshape(-1, 1)
 
     sequences, targets = [], []
-    for i in range(seq_len, len(X_scaled)):
-        sequences.append(X_scaled[i - seq_len:i])
-        targets.append(y_scaled[i])  # scaled target
+    for i in range(seq_len, len(X)):
+        sequences.append(X[i - seq_len:i])
+        targets.append(y[i])  # already scaled target
     return np.array(sequences), np.array(targets).squeeze()
 
 
@@ -79,7 +75,12 @@ def main():
     print("Loading data and artifacts...")
 
     # Load data
-    df = pd.read_csv(FEATURES_DATA_PATH).sort_values("date").reset_index(drop=True)
+    from src.preprocess.shared_preprocessor import prepare_shared_data
+    df, _ = prepare_shared_data()
+    
+    # Ensure date column is present for time-based operations if needed
+    if 'date' in df.columns:
+        df = df.sort_values("date").reset_index(drop=True)
 
     # Load metadata
     if not FEATURES_FILE.exists():
@@ -95,8 +96,8 @@ def main():
     with open(TARGET_SCALER_FILE, "rb") as f:
         target_scaler = pickle.load(f)
 
-    # Build sequences (properly scaled)
-    X_all, y_all = build_sequences(df, feature_cols, feature_scaler, target_scaler, seq_len=SEQ_LEN)
+    # Build sequences (using pre-scaled data)
+    X_all, y_all = build_sequences(df, feature_cols, seq_len=SEQ_LEN)
     if len(X_all) == 0:
         raise ValueError("No sequences available. Check SEQ_LEN and dataset length.")
 

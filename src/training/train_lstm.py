@@ -137,7 +137,7 @@ def train_lstm(
     """
 
     print(" Preparing shared data (unified for LSTM + TFT)...")
-    df, feature_cols = prepare_shared_data(seq_len=seq_len)
+    df, feature_cols = prepare_shared_data(seq_len=seq_len, is_training=True)
 
     # --- Load the same shared scalers used for TFT ---
     with open(SAVED_MODELS_DIR / "shared_feature_scaler.pkl", "rb") as f:

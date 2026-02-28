@@ -12,11 +12,13 @@ import subprocess
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from src.fetch.fetch_stock import update_stock_data
+from src.fetch.fetch_stock import fetch_full_stock_data
 from src.fetch.fetch_news import update_news_data
 from src.preprocess.sentiment_pipeline import add_sentiment_to_news_data
 from src.preprocess.features import build_features
-
+from src.inference.predict import predict_next_day
+from src.inference.ensemble import ensemble_predict
+from src.utils.track_predictions import record_today_prediction
 
 def main():
     """
@@ -29,7 +31,7 @@ def main():
     # Step 1: Fetch stock data
     print("\n[1/4] Fetching stock data...")
     try:
-        stock_df = update_stock_data()
+        stock_df = fetch_full_stock_data()
         print(f"✓ Stock data updated: {len(stock_df)} records")
     except Exception as e:
         print(f"✗ Error fetching stock data: {e}")
@@ -67,7 +69,30 @@ def main():
         print("⚠ Continuing without updated features...")
     
     print("\n" + "=" * 60)
-    print("Data refresh complete! Launching Streamlit dashboard...")
+    print("Data refresh complete! Generating predictions to store in DB...")
+    print("=" * 60)
+    
+    # Generate predictions to save
+    try:
+        from src.inference.predict import predict_next_day_lstm, predict_next_day_tft
+        print("[*] Generating LSTM prediction...")
+        lstm_res = predict_next_day_lstm()
+        print("[*] Generating TFT prediction...")
+        tft_res = predict_next_day_tft()
+        print("[*] Generating Ensemble prediction...")
+        ens_res = ensemble_predict()
+        
+        record_today_prediction(
+            lstm_res["predicted_price"], 
+            tft_res["predicted_price"], 
+            ens_res["predicted_price"]
+        )
+    except Exception as e:
+        print(f"✗ Error generating and tracking predictions: {e}")
+        print("Continuing to dashboard...")
+
+    print("\n" + "=" * 60)
+    print("Predictions saved! Launching Streamlit dashboard...")
     print("=" * 60)
     
     # Launch Streamlit using venv Python explicitly

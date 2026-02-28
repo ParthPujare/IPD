@@ -1,0 +1,33 @@
+LSTM Model Configuration
+------------------------
+- Architecture: Bidirectional LSTM with Layer Normalization and Dropout
+- Number of Layers: 3 LSTM layers
+- Hidden Size: 256 units
+- Sequence Length: 30 days
+- Dropout Rate: 30%
+- Batch Size: 32
+- Optimizer: Adam (Initial LR = 0.0005) with OneCycleLR scheduler
+- Loss Function: Mean Squared Error (MSE)
+- Epochs: Up to 80 (with early stopping tracking validation loss)
+
+
+TFT (Temporal Fusion Transformer) Configuration
+-----------------------------------------------
+- Architecture: Attention-based Temporal Fusion Transformer
+- Hidden Size: 64 units
+- Attention Heads: 2 heads
+- Sequence Length: 30 days (Encoder/Lookback)
+- Dropout Rate: 10%
+- Batch Size: 64
+- Optimizer: AdamW (LR = 0.001) with ReduceLROnPlateau scheduler (patience=4)
+- Loss Function: Mean Absolute Error (MAE)
+- Epochs: Up to 50 (with early stopping tracking validation loss)
+
+
+Model Evaluation Storage Mechanism
+----------------------------------
+Prediction generation logic uses `src/utils/track_predictions.py`.
+1. Data Storage: Predictions are stored locally in a comma-separated values (CSV) log file located at `data/prediction_history.csv`.
+2. Prediction Record: For each valid ML prediction day, a pipeline process records the LSTM, TFT, and Ensemble predictions under a new row representing that date.
+3. Actual Price Backfilling: When the tracking logic runs on subsequent days, it loads authoritative historical stock prices from `data/stock_data.csv`. The script identifies the actual Close market price that occurred for previous predicted dates and backfills the empty `Actual_Close_Price` column in `prediction_history.csv`.
+4. Result: This table generates empirical data aligning "what we predicted" strictly against "what actually happened" to easily calculate true operational MAPE, MSE, or R².

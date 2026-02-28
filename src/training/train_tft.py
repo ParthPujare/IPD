@@ -151,7 +151,7 @@ def prepare_tft_data(seq_len=30, test_size=0.2, debug=False, min_val_samples=120
     Ensures both models are trained on identical inputs.
     """
     # === Get pre-scaled, unified dataset ===
-    df, feature_cols = prepare_shared_data(seq_len=seq_len)
+    df, feature_cols = prepare_shared_data(seq_len=seq_len, is_training=True)
     df["date"] = pd.to_datetime(df["date"])
     df["time_idx"] = (df["date"] - df["date"].min()).dt.days
     df["group_id"] = df.get("ticker", "ADANIGREEN.NS").fillna("ADANIGREEN.NS")
