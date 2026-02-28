@@ -152,8 +152,17 @@ st.title(" AdaniGreenPredictor Dashboard")
 st.markdown("Real-time stock price prediction for Adani Green Energy (ADANIGREEN.NS)")
 
 # --- SIDEBAR ---
-st.sidebar.title(" Settings")
+st.sidebar.title("⚙️ Settings")
 model_option = st.sidebar.selectbox("Select Model", ["LSTM", "TFT", "Ensemble"], help="Choose prediction model")
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("🧠 About the Models")
+if model_option == "LSTM":
+    st.sidebar.info("**LSTM (Long Short-Term Memory)**: A type of Recurrent Neural Network (RNN) excellent at learning from sequences of data (like historical prices) to predict the future. It 'remembers' important past trends and 'forgets' noise.")
+elif model_option == "TFT":
+    st.sidebar.info("**TFT (Temporal Fusion Transformer)**: An advanced attention-based architecture designed specifically for time series. It can learn complex relationships and incorporate multiple features (like volume and sentiment) effectively.")
+elif model_option == "Ensemble":
+    st.sidebar.info("**Ensemble**: Combines predictions from both LSTM and TFT to provide a more robust and stable estimate, reducing the risk of a single model's error.")
 
 # --- 🔧 AUTO DATA UPDATE ---
 if st.sidebar.button(" Refresh Data (Manual)"):
@@ -270,7 +279,22 @@ else:
         else:
             st.dataframe(news_display, use_container_width=True, hide_index=True)
 
+    # --- PREDICTION HISTORY SECTION ---
+    st.markdown("---")
+    st.subheader("📅 Historical Prediction Tracking")
+    st.markdown("Track how well the models have been performing over time. The **Actual Close Price** is updated on the following trading day to compare against the predictions made.")
     
+    history_path = get_project_root() / "data" / "prediction_history.csv"
+    if history_path.exists():
+        history_df = pd.read_csv(history_path)
+        if not history_df.empty:
+            # Sort by date descending
+            history_df = history_df.sort_values(by="Prediction_Date", ascending=False).reset_index(drop=True)
+            st.dataframe(history_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Prediction history is currently empty.")
+    else:
+        st.info("Prediction history file not found. Predictions will be recorded after the next run.")
 
 # Footer
 st.markdown("---")
