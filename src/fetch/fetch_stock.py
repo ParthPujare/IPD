@@ -1,5 +1,5 @@
 """
-Fetch and refresh full historical stock data (2020→today) for ADANIGREEN.NS using yfinance.
+Fetch and refresh full historical stock data (2020→today) for multiple tickers using yfinance.
 Generates aligned enhanced feature dataset compatible with trained models.
 """
 
@@ -17,7 +17,15 @@ sys.path.insert(0, str(project_root))
 from src.utils.helpers import get_project_root, ensure_dir
 
 # --- Constants ---
-TICKER = "ADANIGREEN.NS"
+# Replaced single TICKER with a list of our desired Indian stocks
+TICKERS = [
+    "ADANIGREEN.NS",
+    "VEDL.NS",
+    "HDFCBANK.NS",
+    "INDIGO.NS",
+    "BEL.NS"
+]
+
 ROOT = get_project_root()
 STOCK_DATA_PATH = ROOT / "data" / "stock_data.csv"
 FEATURES_DATA_PATH = ROOT / "data" / "features_enhanced.csv"
@@ -26,22 +34,23 @@ FEATURES_DATA_PATH = ROOT / "data" / "features_enhanced.csv"
 # ==========================================================
 # 1. Fetch full data (2020 → today)
 # ==========================================================
-def fetch_full_stock_data():
+def fetch_single_stock_data(ticker_symbol: str):
     start_date = "2020-01-01"
     end_date = datetime.today().strftime("%Y-%m-%d")
-    print(f"Fetching full stock data for {TICKER} from {start_date} to {end_date} ...")
-    ticker = yf.Ticker(TICKER)
+    print(f"Fetching full stock data for {ticker_symbol} from {start_date} to {end_date} ...")
+    
+    ticker = yf.Ticker(ticker_symbol)
     df = ticker.history(start=start_date, end=end_date, interval="1d")
 
     if df.empty:
-        raise ValueError(f"No data fetched for {TICKER}")
+        raise ValueError(f"No data fetched for {ticker_symbol}")
 
     df.reset_index(inplace=True)
     df.rename(columns={"Date": "date"}, inplace=True)
     df["date"] = pd.to_datetime(df["date"]).dt.date
-    df["ticker"] = TICKER
+    df["ticker"] = ticker_symbol
 
-    print(f"Fetched {len(df)} records.")
+    print(f"Fetched {len(df)} records for {ticker_symbol}.")
     return df[["date", "ticker", "Open", "High", "Low", "Close", "Volume"]]
 
 
@@ -119,22 +128,49 @@ def compute_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ==========================================================
-# 3. Full data refresh
+# 3. Full data refresh (Multi-Stock)
 # ==========================================================
 def refresh_all():
     ensure_dir(STOCK_DATA_PATH.parent)
-    print("Refreshing full stock dataset...")
-    df = fetch_full_stock_data()
-    df.to_csv(STOCK_DATA_PATH, index=False)
-    print(f"Saved raw stock data → {STOCK_DATA_PATH}")
+    print("Refreshing full stock dataset for all configured tickers...")
+    
+    all_raw_dfs = []
+    all_feat_dfs = []
+    
+    for ticker in TICKERS:
+        try:
+            # Fetch raw data for a single stock
+            df_raw = fetch_single_stock_data(ticker)
+            all_raw_dfs.append(df_raw)
+            
+            # Compute features for this specific stock so moving averages don't bleed
+            df_feat = compute_features(df_raw)
+            all_feat_dfs.append(df_feat)
+            
+            print(f"✅ Successfully processed {ticker}\n")
+        except Exception as e:
+            print(f"❌ Error processing {ticker}: {e}\n")
 
-    print("Generating enhanced feature dataset...")
-    df_feat = compute_features(df)
-    df_feat.to_csv(FEATURES_DATA_PATH, index=False)
-    print(f"Enhanced features saved → {FEATURES_DATA_PATH}")
-    print(f"{len(df_feat)} rows | {len(df_feat.columns)} columns")
-    print("Preview:\n", df_feat.tail())
-    return df_feat
+    if not all_raw_dfs:
+        raise ValueError("No data was fetched for any tickers. Check your internet connection or ticker symbols.")
+
+    # Combine all individual stock DataFrames into master DataFrames
+    final_raw_df = pd.concat(all_raw_dfs, ignore_index=True)
+    final_feat_df = pd.concat(all_feat_dfs, ignore_index=True)
+
+    # Sort to keep timeline organized
+    final_raw_df = final_raw_df.sort_values(by=["date", "ticker"]).reset_index(drop=True)
+    final_feat_df = final_feat_df.sort_values(by=["date", "ticker"]).reset_index(drop=True)
+
+    # Save master datasets
+    final_raw_df.to_csv(STOCK_DATA_PATH, index=False)
+    print(f"Saved master raw stock data → {STOCK_DATA_PATH}")
+
+    final_feat_df.to_csv(FEATURES_DATA_PATH, index=False)
+    print(f"Saved master enhanced features → {FEATURES_DATA_PATH}")
+    
+    print(f"Total Rows: {len(final_feat_df)} | Total Columns: {len(final_feat_df.columns)}")
+    return final_feat_df
 
 
 # ==========================================================
@@ -154,4 +190,4 @@ def update_features_enhanced():
 # ==========================================================
 if __name__ == "__main__":
     df = refresh_all()
-    print(f"\nDate range: {df['date'].min()} → {df['date'].max()}")
+    print(f"\nOverall Date range: {df['date'].min()} → {df['date'].max()}")
